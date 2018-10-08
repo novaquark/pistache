@@ -285,6 +285,7 @@ public:
 
     bool hasParam(const std::string& name) const;
     TypedParam param(const std::string& name) const;
+    TypedParam param(std::size_t index) const;
 
     TypedParam splatAt(size_t index) const;
     std::vector<TypedParam> splat() const;

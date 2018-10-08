@@ -47,6 +47,15 @@ Request::param(const std::string& name) const {
 }
 
 TypedParam
+Request::param(std::size_t index) const {
+    if (index >= params_.size()) {
+        throw std::runtime_error("Out of bound parameter access");
+    }
+
+    return params_[index];
+}
+
+TypedParam
 Request::splatAt(size_t index) const {
     if (index >= splats_.size()) {
         throw std::out_of_range("Request splat index out of range");

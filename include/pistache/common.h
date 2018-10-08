@@ -16,8 +16,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-#define unsafe
-
 #define TRY(...) \
     do { \
         auto ret = __VA_ARGS__; \

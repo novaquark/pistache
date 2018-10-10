@@ -1,6 +1,12 @@
 cmake_minimum_required (VERSION 3.8.2)
 project (pistache)
 
+if("$ENV{FORCE_GCC6}")
+    message("== Forcing pistache compiler to gcc/g++ 6 ==\n")
+    set(CMAKE_CXX_COMPILER "/usr/bin/g++-6")
+    set(CMAKE_CC_COMPILER  "/usr/bin/gcc-6")
+endif()
+
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -Wall -pedantic -Wextra -Wno-missing-field-initializers")
 
 option(PISTACHE_BUILD_TESTS "build tests alongside the project" OFF)

@@ -170,8 +170,8 @@ public:
 
     typedef std::function<void()> OnResponseParsed;
 
-    void onReady(const Aio::FdSet& fds);
-    void registerPoller(Polling::Epoll& poller);
+    void onReady(const Aio::FdSet& fds) override;
+    void registerPoller(Polling::Epoll& poller) override;
 
     Async::Promise<void>
     asyncConnect(const std::shared_ptr<Connection>& connection, const struct sockaddr* address, socklen_t addr_len);
@@ -306,7 +306,6 @@ public:
            : threads_(Default::Threads)
            , maxConnectionsPerHost_(Default::MaxConnectionsPerHost)
            , keepAlive_(Default::KeepAlive)
-
        { }
 
        Options& threads(int val);
@@ -323,7 +322,7 @@ public:
    ~Client();
 
    static Options options();
-   void init(const Options& options);
+   void init(const Options& options = Options());
 
    RequestBuilder get(const std::string& resource);
    RequestBuilder post(const std::string& resource);

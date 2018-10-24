@@ -484,6 +484,37 @@ namespace Async {
 
             };
 
+            template<typename PromiseType>
+            struct Chainer {
+                Chainer(const std::shared_ptr<Private::Core>& core)
+                    : chainCore(core)
+                { }
+
+                void operator()(const PromiseType& val) {
+                    chainCore->construct<PromiseType>(val);
+                    for (const auto& req: chainCore->requests) {
+                        req->resolve(chainCore);
+                    }
+                }
+
+                std::shared_ptr<Core> chainCore;
+            };
+
+            template<>
+            struct Chainer<void> {
+                Chainer(const std::shared_ptr<Private::Core>& core)
+                    : chainCore(core)
+                { }
+
+                void operator()() {
+                    chainCore->state = State::Fulfilled;
+                    for (const auto& req: chainCore->requests) {
+                        req->resolve(chainCore);
+                    }
+                }
+
+                std::shared_ptr<Core> chainCore;
+            };
             // Specialization for a callback returning a Promise
             template<typename T, typename Resolve, typename Reject, typename U, typename... Args>
             struct Continuation<T, Resolve, Reject, Promise<U> (Args...)> : public Continuable<T> {
@@ -519,21 +550,6 @@ namespace Async {
                     }
                 }
 
-                template<typename PromiseType>
-                struct Chainer {
-                    Chainer(const std::shared_ptr<Private::Core>& core)
-                        : chainCore(core)
-                    { }
-
-                    void operator()(const PromiseType& val) {
-                        chainCore->construct<PromiseType>(val);
-                        for (const auto& req: chainCore->requests) {
-                            req->resolve(chainCore);
-                        }
-                    }
-
-                    std::shared_ptr<Core> chainCore;
-                };
 
                 template<
                     typename Promise,

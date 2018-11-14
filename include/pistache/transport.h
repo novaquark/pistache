@@ -66,7 +66,7 @@ public:
 
     void disarmTimer(Fd fd);
 
-    std::shared_ptr<Aio::Handler> clone() const;
+    std::shared_ptr<Aio::Handler> clone() const override;
 
 private:
     enum WriteStatus {

@@ -29,6 +29,7 @@ namespace Aio {
 class FdSet {
 public:
     FdSet(std::vector<Polling::Event>&& events)
+       : events_()
     {
         events_.reserve(events.size());
         for (auto &&event: events) {
@@ -115,7 +116,7 @@ public:
         }
 
     private:
-        Key(uint64_t data);
+        explicit Key(uint64_t data);
         uint64_t data_;
     };
 
@@ -133,7 +134,7 @@ public:
             const Key& key, Fd fd, Polling::NotifyOn interest, Polling::Tag tag,
             Polling::Mode mode = Polling::Mode::Level);
     void registerFdOneShot(
-            const Key& key, Fd fd, Polling::NotifyOn intereset, Polling::Tag tag,
+            const Key& key, Fd fd, Polling::NotifyOn interest, Polling::Tag tag,
             Polling::Mode mode = Polling::Mode::Level);
 
     void registerFd(
@@ -163,19 +164,23 @@ private:
 
 class ExecutionContext {
 public:
+    virtual ~ExecutionContext() {}
     virtual Reactor::Impl* makeImpl(Reactor* reactor) const = 0;
 };
 
 class SyncContext : public ExecutionContext {
 public:
+    virtual ~SyncContext() {}
     Reactor::Impl* makeImpl(Reactor* reactor) const override;
 };
 
 class AsyncContext : public ExecutionContext {
 public:
-    AsyncContext(size_t threads)
+    explicit AsyncContext(size_t threads)
         : threads_(threads)
     { }
+
+    virtual ~AsyncContext() {}
 
     Reactor::Impl* makeImpl(Reactor* reactor) const override;
 
@@ -200,6 +205,10 @@ public:
     struct Context {
         friend class SyncImpl;
 
+        Context()
+            : tid()
+        { }
+
         std::thread::id thread() const { return tid; }
 
     private:
@@ -207,7 +216,7 @@ public:
     };
 
     virtual void onReady(const FdSet& fds) = 0;
-    virtual void registerPoller(Polling::Epoll& /*poller*/) { }
+    virtual void registerPoller(Polling::Epoll& poller) = 0;
 
     Reactor* reactor() const {
         return reactor_;

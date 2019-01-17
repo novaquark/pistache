@@ -5,11 +5,6 @@
 */
 
 #pragma once
-#include <atomic>
-#include <deque>
-
-#include <sys/types.h>
-#include <sys/socket.h>
 
 #include <pistache/async.h>
 #include <pistache/os.h>
@@ -17,6 +12,17 @@
 #include <pistache/timer_pool.h>
 #include <pistache/reactor.h>
 #include <pistache/view.h>
+
+#include <sys/types.h>
+#include <sys/socket.h>
+
+#include <atomic>
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 
 namespace Pistache {
 namespace Http {
@@ -30,15 +36,14 @@ struct Connection : public std::enable_shared_from_this<Connection> {
 
     friend class ConnectionPool;
 
-    typedef std::function<void()> OnDone;
+    using OnDone = std::function<void()>;
 
     Connection()
         : fd(-1)
-        , inflightCount(0)
-        , responsesReceived(0)
-        , connectionState_(NotConnected)
+        , requestEntry(nullptr) 
     {
         state_.store(static_cast<uint32_t>(State::Idle));
+        connectionState_.store(NotConnected);
     }
 
     struct RequestData {
@@ -73,7 +78,7 @@ struct Connection : public std::enable_shared_from_this<Connection> {
         Connected
     };
 
-    void connect(Address addr);
+    void connect(const Address& addr);
     void close();
     bool isIdle() const;
     bool isConnected() const;
@@ -81,6 +86,11 @@ struct Connection : public std::enable_shared_from_this<Connection> {
     void associateTransport(const std::shared_ptr<Transport>& transport);
 
     Async::Promise<Response> perform(
+            const Http::Request& request,
+            std::chrono::milliseconds timeout,
+            OnDone onDone);
+
+    Async::Promise<Response> asyncPerform(
             const Http::Request& request,
             std::chrono::milliseconds timeout,
             OnDone onDone);
@@ -101,11 +111,6 @@ struct Connection : public std::enable_shared_from_this<Connection> {
     std::string dump() const;
 
 private:
-    std::atomic<int> inflightCount;
-    std::atomic<int> responsesReceived;
-    struct sockaddr_in saddr;
-
-
     void processRequestQueue();
 
     struct RequestEntry {
@@ -125,23 +130,29 @@ private:
         OnDone onDone;
     };
 
+    struct sockaddr_in saddr;
+    std::unique_ptr<RequestEntry> requestEntry;
     std::atomic<uint32_t> state_;
-    ConnectionState connectionState_;
+    std::atomic<ConnectionState> connectionState_;
     std::shared_ptr<Transport> transport_;
     Queue<RequestData> requestsQueue;
 
-    std::deque<RequestEntry> inflightRequests;
-
     TimerPool timerPool_;
-    Private::Parser<Http::Response> parser_;
+    Private::Parser<Http::Response> parser;
 };
 
 class ConnectionPool {
 public:
+    ConnectionPool()
+        : connsLock()
+        , conns()
+        , maxConnectionsPerHost()
+    { }
+
     void init(size_t maxConnsPerHost);
 
     std::shared_ptr<Connection> pickConnection(const std::string& domain);
-    void releaseConnection(const std::shared_ptr<Connection>& connection);
+    static void releaseConnection(const std::shared_ptr<Connection>& connection);
 
     size_t usedConnections(const std::string& domain) const;
     size_t idleConnections(const std::string& domain) const;
@@ -151,9 +162,9 @@ public:
     void closeIdleConnections(const std::string& domain);
 
 private:
-    typedef std::vector<std::shared_ptr<Connection>> Connections;
-    typedef std::mutex Lock;
-    typedef std::lock_guard<Lock> Guard;
+    using Connections = std::vector<std::shared_ptr<Connection>>;
+    using Lock = std::mutex;
+    using Guard = std::lock_guard<Lock>;
 
     mutable Lock connsLock;
     std::unordered_map<std::string, Connections> conns;
@@ -165,10 +176,21 @@ public:
 
     PROTOTYPE_OF(Aio::Handler, Transport)
 
-    Transport() {}
-    Transport(const Transport &rhs) { UNUSED(rhs); }
+    Transport()
+      : requestsQueue()
+      , connectionsQueue()
+      , connections()
+      , requests()
+      , timeouts()
+    { }
 
-    typedef std::function<void()> OnResponseParsed;
+    Transport(const Transport &)
+      : requestsQueue()
+      , connectionsQueue()
+      , connections()
+      , requests()
+      , timeouts()
+    { }
 
     void onReady(const Aio::FdSet& fds) override;
     void registerPoller(Polling::Epoll& poller) override;
@@ -179,7 +201,7 @@ public:
     Async::Promise<ssize_t> asyncSendRequest(
             const std::shared_ptr<Connection>& connection,
             std::shared_ptr<TimerPool::Entry> timer,
-            const Buffer& buffer);
+            std::string buffer);
 
 private:
 
@@ -211,12 +233,12 @@ private:
                 Async::Resolver resolve, Async::Rejection reject,
                 std::shared_ptr<Connection> connection,
                 std::shared_ptr<TimerPool::Entry> timer,
-                const Buffer& buffer)
+                std::string buf)
             : resolve(std::move(resolve))
             , reject(std::move(reject))
             , connection(std::move(connection))
             , timer(std::move(timer))
-            , buffer(buffer)
+            , buffer(std::move(buf))
         {
         }
 
@@ -224,8 +246,7 @@ private:
         Async::Rejection reject;
         std::shared_ptr<Connection> connection;
         std::shared_ptr<TimerPool::Entry> timer;
-        Buffer buffer;
-
+        std::string buffer;
     };
 
 
@@ -277,13 +298,14 @@ public:
     RequestBuilder& body(const std::string& val);
     RequestBuilder& body(std::string&& val);
 
-    RequestBuilder& timeout(std::chrono::milliseconds value);
+    RequestBuilder& timeout(std::chrono::milliseconds val);
 
     Async::Promise<Response> send();
 
 private:
-    RequestBuilder(Client* const client)
+    explicit RequestBuilder(Client* const client)
         : client_(client)
+        , request_()
         , timeout_(std::chrono::milliseconds(0))
     { }
 
@@ -336,21 +358,21 @@ private:
    std::shared_ptr<Aio::Reactor> reactor_;
 
    ConnectionPool pool;
-   std::shared_ptr<Transport> transport_;
    Aio::Reactor::Key transportKey;
 
    std::atomic<uint64_t> ioIndex;
 
-   typedef std::mutex Lock;
-   typedef std::lock_guard<Lock> Guard;
+   using Lock = std::mutex;
+   using Guard = std::lock_guard<Lock>;
 
    Lock queuesLock;
    std::unordered_map<std::string, MPMCQueue<std::shared_ptr<Connection::RequestData>, 2048>> requestsQueues;
+   bool stopProcessPequestsQueues;
 
    RequestBuilder prepareRequest(const std::string& resource, Http::Method method);
 
    Async::Promise<Response> doRequest(
-           Http::Request req,
+           Http::Request request,
            std::chrono::milliseconds timeout);
 
    void processRequestQueue();

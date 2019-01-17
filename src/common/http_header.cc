@@ -6,6 +6,7 @@
 
 #include <stdexcept>
 #include <iterator>
+#include <limits>
 #include <cstring>
 #include <iostream>
 
@@ -13,6 +14,7 @@
 #include <pistache/common.h>
 #include <pistache/http.h>
 #include <pistache/stream.h>
+#include <arpa/inet.h>
 
 using namespace std;
 
@@ -331,21 +333,58 @@ Expect::write(std::ostream& os) const {
     }
 }
 
-Host::Host(const std::string& data) {
+Host::Host(const std::string& data)
+    : host_()
+    , port_(0)
+{
     parse(data);
 }
 
 void
 Host::parse(const std::string& data) {
-    auto pos = data.find(':');
-    if (pos != std::string::npos) {
-        std::string h = data.substr(0, pos);
-        int16_t p = std::stoi(data.substr(pos + 1));
-
-        host_ = h;
-        port_ = p;
+    unsigned long pos = data.find(']');
+    unsigned long s_pos = data.find('[');
+    if (pos != std::string::npos && s_pos != std::string::npos) {
+        //IPv6 address
+        host_ = data.substr(s_pos, pos+1);
+        try {
+            in6_addr addr6;
+            char buff6[INET6_ADDRSTRLEN+1];
+            memcpy(buff6, host_.c_str(), INET6_ADDRSTRLEN);
+            inet_pton(AF_INET6, buff6, &(addr6.s6_addr16));
+        } catch (std::runtime_error) {
+            throw std::invalid_argument("Invalid IPv6 address");
+        }
+        pos++;
     } else {
-        host_ = data;
+        //IPv4 address
+        pos = data.find(':');
+        if (pos == std::string::npos) {
+            host_ = data;
+            port_ = HTTP_STANDARD_PORT;
+        }
+        host_ = data.substr(0, pos);
+        if (host_ == "*") {
+            host_ = "0.0.0.0";
+        }
+        try {
+            in_addr addr;
+            char buff[INET_ADDRSTRLEN+1];
+            memcpy(buff, host_.c_str(), INET_ADDRSTRLEN);
+            inet_pton(AF_INET, buff, &(addr));
+        } catch (std::runtime_error) {
+            throw std::invalid_argument("Invalid IPv4 address");
+        }
+    }
+    char *end;
+    const std::string portPart = data.substr(pos + 1);
+    long port;
+    if (pos != std::string::npos) {
+        port = strtol(portPart.c_str(), &end, 10);
+        if (port < std::numeric_limits<uint16_t>::min()|| port > std::numeric_limits<uint16_t>::max())
+            throw std::invalid_argument("Invalid port");
+        port_ = static_cast<uint16_t>(port);
+    } else {
         port_ = HTTP_STANDARD_PORT;
     }
 }
@@ -443,6 +482,26 @@ AccessControlAllowHeaders::write(std::ostream& os) const {
 }
 
 void
+AccessControlExposeHeaders::parse(const std::string& data) {
+  val_ = data;
+}
+
+void
+AccessControlExposeHeaders::write(std::ostream& os) const {
+  os << val_;
+}
+
+void
+AccessControlAllowMethods::parse(const std::string& data) {
+  val_ = data;
+}
+
+void
+AccessControlAllowMethods::write(std::ostream& os) const {
+  os << val_;
+}
+
+void
 EncodingHeader::parseRaw(const char* str, size_t len) {
     if (!strncasecmp(str, "gzip", len)) {
         encoding_ = Encoding::Gzip;
@@ -474,11 +533,13 @@ Server::Server(const std::vector<std::string>& tokens)
 { }
 
 Server::Server(const std::string& token)
+    : tokens_()
 {
     tokens_.push_back(token);
 }
 
 Server::Server(const char* token)
+   : tokens_()
 {
     tokens_.emplace_back(token);
 }

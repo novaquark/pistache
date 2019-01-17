@@ -97,10 +97,14 @@ namespace {
 Cookie::Cookie(std::string name, std::string value)
     : name(std::move(name))
     , value(std::move(value))
+    , path()
+    , domain()
+    , expires()
+    , maxAge()
     , secure(false)
     , httpOnly(false)
-{
-}
+    , ext()
+{ }
 
 Cookie
 Cookie::fromRaw(const char* str, size_t len)
@@ -204,8 +208,8 @@ Cookie::write(std::ostream& os) const {
 }
 
 CookieJar::CookieJar()
-{
-}
+    : cookies()
+{ }
 
 void
 CookieJar::add(const Cookie& cookie) {
@@ -224,9 +228,9 @@ CookieJar::add(const Cookie& cookie) {
 
 }
 
-void // Unimplemented
-CookieJar::removeCookie(const std::string& name) {
-	// Empty for now, can be used later
+void 
+CookieJar::removeAllCookies() {
+	cookies.clear();
 }
 
 void

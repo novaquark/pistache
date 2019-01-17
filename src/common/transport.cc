@@ -49,13 +49,15 @@ Transport::handleNewPeer(const std::shared_ptr<Tcp::Peer>& peer) {
     const bool isInRightThread = std::this_thread::get_id() == ctx.thread();
     if (!isInRightThread) {
         PeerEntry entry(peer);
-        auto *e = peersQueue.allocEntry(entry);
-        peersQueue.push(e);
+        peersQueue.push(std::move(entry));
     } else {
         handlePeer(peer);
     }
     int fd = peer->fd();
-    toWrite.emplace(fd, std::deque<WriteEntry>{});
+    {
+        Guard guard(toWriteLock);
+        toWrite.emplace(fd, std::deque<WriteEntry>{});
+    }
 }
 
 void
@@ -94,9 +96,12 @@ Transport::onReady(const Aio::FdSet& fds) {
             auto tag = entry.getTag();
             auto fd = tag.value();
 
-            auto it = toWrite.find(fd);
-            if (it == std::end(toWrite)) {
-                throw std::runtime_error("Assertion Error: could not find write data");
+            {
+                Guard guard(toWriteLock);
+                auto it = toWrite.find(fd);
+                if (it == std::end(toWrite)) {
+                    throw std::runtime_error("Assertion Error: could not find write data");
+                }
             }
 
             reactor()->modifyFd(key(), fd, NotifyOn::Read, Polling::Mode::Edge);
@@ -119,17 +124,13 @@ Transport::disarmTimer(Fd fd) {
 
 void
 Transport::handleIncoming(const std::shared_ptr<Peer>& peer) {
-    char buffer[Const::MaxBuffer];
-    memset(buffer, 0, sizeof buffer);
+    char buffer[Const::MaxBuffer] = {0};
 
     ssize_t totalBytes = 0;
     int fd = peer->fd();
 
     for (;;) {
-
-        ssize_t bytes;
-
-        bytes = recv(fd, buffer + totalBytes, Const::MaxBuffer - totalBytes, 0);
+        ssize_t bytes = recv(fd, buffer + totalBytes, Const::MaxBuffer - totalBytes, 0);
         if (bytes == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 if (totalBytes > 0) {
@@ -167,18 +168,21 @@ Transport::handlePeerDisconnection(const std::shared_ptr<Peer>& peer) {
 
     peers.erase(it);
 
-    // Clean up buffers
-    auto & wq = toWrite[fd];
-    while (wq.size() > 0) {
-        auto & entry = wq.front();
-        const BufferHolder & buffer = entry.buffer;
-        if (buffer.isRaw()) {
-            auto raw = buffer.raw();
-            if (raw.isOwned) delete[] raw.data;
+    {
+        // Clean up buffers
+        Guard guard(toWriteLock);
+        auto & wq = toWrite[fd];
+        while (wq.size() > 0) {
+            auto & entry = wq.front();
+            const BufferHolder & buffer = entry.buffer;
+            if (buffer.isRaw()) {
+                auto raw = buffer.raw();
+                if (raw.isOwned) delete[] raw.data;
+            }
+            wq.pop_front();
         }
-        wq.pop_front();
+        toWrite.erase(fd);
     }
-    toWrite.erase(fd);
 
     close(fd);
 }
@@ -186,12 +190,19 @@ Transport::handlePeerDisconnection(const std::shared_ptr<Peer>& peer) {
 void
 Transport::asyncWriteImpl(Fd fd)
 {
-    auto it = toWrite.find(fd);
+    bool stop = false;
+    while (!stop) {
+        Guard guard(toWriteLock);
 
-    // cleanup will have been handled by handlePeerDisconnection
-    if (it == std::end(toWrite)) { return; }
-    auto & wq = it->second;
-    while (wq.size() > 0) {
+        auto it = toWrite.find(fd);
+
+        // cleanup will have been handled by handlePeerDisconnection
+        if (it == std::end(toWrite)) { return; }
+        auto & wq = it->second;
+        if (wq.size() == 0) {
+            break;
+        }
+
         auto & entry = wq.front();
         int flags    = entry.flags;
         const BufferHolder &buffer = entry.buffer;
@@ -206,10 +217,10 @@ Transport::asyncWriteImpl(Fd fd)
             if (wq.size() == 0) {
                 toWrite.erase(fd);
                 reactor()->modifyFd(key(), fd, NotifyOn::Read, Polling::Mode::Edge);
+                stop = true;
             }
         };
 
-        bool halt = false;
         size_t totalWritten = buffer.offset();
         for (;;) {
             ssize_t bytesWritten = 0;
@@ -232,20 +243,19 @@ Transport::asyncWriteImpl(Fd fd)
                 else {
                     cleanUp();
                     deferred.reject(Pistache::Error::system("Could not write data"));
-                    halt = true;
                 }
                 break;
             }
             else {
                 totalWritten += bytesWritten;
                 if (totalWritten >= buffer.size()) {
-                    cleanUp();
-
                     if (buffer.isFile()) {
                         // done with the file buffer, nothing else knows whether to
                         // close it with the way the code is written.
                         ::close(buffer.fd());
                     }
+
+                    cleanUp();
 
                     // Cast to match the type of defered template
                     // to avoid a BadType exception
@@ -254,7 +264,6 @@ Transport::asyncWriteImpl(Fd fd)
                 }
             }
         }
-        if (halt) break;
     }
 }
 
@@ -268,8 +277,7 @@ Transport::armTimerMs(
     TimerEntry entry(fd, value, std::move(deferred));
 
     if (!isInRightThread) {
-        auto *e = timersQueue.allocEntry(std::move(entry));
-        timersQueue.push(e);
+        timersQueue.push(std::move(entry));
     } else {
         armTimerMsImpl(std::move(entry));
     }
@@ -319,7 +327,10 @@ Transport::handleWriteQueue() {
         auto fd = write.peerFd;
         if (!isPeerFd(fd)) continue;
 
-        toWrite[fd].push_back(std::move(write));
+        {
+            Guard guard(toWriteLock);
+            toWrite[fd].push_back(std::move(write));
+        }
 
         reactor()->modifyFd(key(), fd, NotifyOn::Read | NotifyOn::Write, Polling::Mode::Edge);
     }

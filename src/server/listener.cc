@@ -8,11 +8,13 @@
 #include <pistache/common.h>
 #include <pistache/os.h>
 #include <pistache/transport.h>
+#include <pistache/errors.h>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <sys/types.h>
 #include <netdb.h>
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
@@ -156,20 +158,21 @@ Listener::bind(const Address& address) {
     addr_ = address;
 
     struct addrinfo hints;
-    hints.ai_family = AF_INET;
+    hints.ai_family = address.family();
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
     hints.ai_protocol = 0;
 
     const auto& host = addr_.host();
     const auto& port = addr_.port().toString();
-    struct addrinfo *addrs;
-    TRY(::getaddrinfo(host.c_str(), port.c_str(), &hints, &addrs));
+    AddrInfo addr_info;
+
+    TRY(addr_info.invoke(host.c_str(), port.c_str(), &hints));
 
     int fd = -1;
 
-    addrinfo *addr;
-    for (addr = addrs; addr; addr = addr->ai_next) {
+    const addrinfo * addr = nullptr;
+    for (addr = addr_info.get_info_ptr(); addr; addr = addr->ai_next) {
         fd = ::socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
         if (fd < 0) continue;
 
@@ -183,7 +186,7 @@ Listener::bind(const Address& address) {
         TRY(::listen(fd, backlog_));
         break;
     }
-    
+
     // At this point, it is still possible that we couldn't bind any socket. If it is the case, the previous
     // loop would have exited naturally and addr will be null.
     if (addr == nullptr) {
@@ -206,8 +209,34 @@ Listener::isBound() const {
     return listen_fd != -1;
 }
 
+// Return actual TCP port Listener is on, or 0 on error / no port.
+// Notes:
+// 1) Default constructor for 'Port()' sets value to 0.
+// 2) Socket is created inside 'Listener::run()', which is called from
+//    'Endpoint::serve()' and 'Endpoint::serveThreaded()'.  So getting the
+//    port is only useful if you attempt to do so from a _different_ thread
+//    than the one running 'Listener::run()'.  So for a traditional single-
+//    threaded program this method is of little value.
+Port
+Listener::getPort() const {
+    if (listen_fd == -1) {
+        return Port();
+    }
+
+    struct sockaddr_in sock_addr = {0};
+    socklen_t addrlen = sizeof(sock_addr);
+    auto sock_addr_alias = reinterpret_cast<struct sockaddr*>(&sock_addr);
+
+    if (-1 == getsockname(listen_fd, sock_addr_alias, &addrlen)) {
+        return Port();
+    }
+
+    return Port(ntohs(sock_addr.sin_port));
+}
+
 void
 Listener::run() {
+    shutdownFd.bind(poller);
     reactor_.run();
 
     for (;;) {
@@ -218,15 +247,22 @@ Listener::run() {
             if (errno == EINTR && g_listen_fd == -1) return;
             throw Error::system("Polling");
         }
-        else if (ready_fds > 0) {
-            for (const auto& event: events) {
-                if (event.tag == shutdownFd.tag())
-                    return;
-                else {
-                    if (event.flags.hasFlag(Polling::NotifyOn::Read)) {
-                        auto fd = event.tag.value();
-                        if (static_cast<ssize_t>(fd) == listen_fd)
-                            handleNewConnection();
+        for (const auto& event: events) {
+            if (event.tag == shutdownFd.tag())
+                return;
+
+            if (event.flags.hasFlag(Polling::NotifyOn::Read)) {
+                auto fd = event.tag.value();
+                if (static_cast<ssize_t>(fd) == listen_fd) {
+                    try {
+                        handleNewConnection();
+                    }
+                    catch (SocketError& ex) {
+                        std::cerr << "Server: " << ex.what() << std::endl;
+                    }
+                    catch (ServerError& ex) {
+                        std::cerr << "Server: " << ex.what() << std::endl;
+                        throw;
                     }
                 }
             }
@@ -236,7 +272,6 @@ Listener::run() {
 
 void
 Listener::runThreaded() {
-    shutdownFd.bind(poller);
     acceptThread = std::thread([=]() { this->run(); });
 }
 
@@ -313,7 +348,10 @@ Listener::handleNewConnection() {
     socklen_t peer_addr_len = sizeof(peer_addr);
     int client_fd = ::accept(listen_fd, (struct sockaddr *)&peer_addr, &peer_addr_len);
     if (client_fd < 0) {
-        throw std::runtime_error(strerror(errno));
+        if (errno == EBADF || errno == ENOTSOCK)
+            throw ServerError(strerror(errno));
+        else
+            throw SocketError(strerror(errno));
     }
 
     make_non_blocking(client_fd);

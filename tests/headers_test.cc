@@ -1,10 +1,21 @@
-#include "gtest/gtest.h"
-#include <chrono>
-
 #include <pistache/http_headers.h>
 #include <pistache/date.h>
 
+#include "gtest/gtest.h"
+
+#include <algorithm>
+#include <chrono>
+
 using namespace Pistache::Http;
+
+class TestHeader : public Header::Header {
+public:
+    NAME("TestHeader");
+
+    void write(std::ostream& os) const override {
+        os << "TestHeader";
+    }
+};
 
 TEST(headers_test, accept) {
     Header::Accept a1;
@@ -246,6 +257,22 @@ TEST(headers_test, host) {
     host.parse("localhost:8080");
     ASSERT_EQ(host.host(), "localhost");
     ASSERT_EQ(host.port(), 8080);
+    
+/* Due to an error in GLIBC these tests don't fail as expected, further research needed */
+//     ASSERT_THROW( host.parse("256.256.256.256:8080");, std::invalid_argument);
+//     ASSERT_THROW( host.parse("1.0.0.256:8080");, std::invalid_argument);
+    
+    host.parse("[::1]:8080");
+    ASSERT_EQ(host.host(), "[::1]");
+    ASSERT_EQ(host.port(), 8080);
+    
+    host.parse("[2001:0DB8:AABB:CCDD:EEFF:0011:2233:4455]:8080");
+    ASSERT_EQ(host.host(), "[2001:0DB8:AABB:CCDD:EEFF:0011:2233:4455]");
+    ASSERT_EQ(host.port(), 8080);
+    
+/* Due to an error in GLIBC these tests don't fail as expected, further research needed */
+//     ASSERT_THROW( host.parse("[GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG]:8080");, std::invalid_argument);
+//     ASSERT_THROW( host.parse("[::GGGG]:8080");, std::invalid_argument);
 }
 
 TEST(headers_test, user_agent) {
@@ -285,4 +312,33 @@ TEST(headers_test, access_control_allow_headers_test)
 
     allowHeaders.parse("Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
     ASSERT_EQ(allowHeaders.val(), "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
+}
+
+TEST(headers_test, access_control_expose_headers_test)
+{
+    Header::AccessControlExposeHeaders exposeHeaders;
+
+    exposeHeaders.parse("Accept, Location");
+    ASSERT_EQ(exposeHeaders.val(), "Accept, Location");
+}
+
+TEST(headers_test, access_control_allow_methods_test)
+{
+    Header::AccessControlAllowMethods allowMethods;
+
+    allowMethods.parse("GET, POST, DELETE");
+    ASSERT_EQ(allowMethods.val(), "GET, POST, DELETE");
+}
+
+TEST(headers_test, add_new_header_test)
+{
+    const std::string headerName = "TestHeader";
+
+    ASSERT_FALSE(Header::Registry::instance().isRegistered(headerName));
+    Header::Registry::instance().registerHeader<TestHeader>();
+    ASSERT_TRUE(Header::Registry::instance().isRegistered(headerName));
+
+    const auto& headersList = Header::Registry::instance().headersList();
+    const bool isFound = std::find(headersList.begin(), headersList.end(), headerName) != headersList.end();
+    ASSERT_TRUE(isFound);
 }

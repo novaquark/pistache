@@ -13,6 +13,7 @@
 #include <sstream>
 #include <algorithm>
 #include <memory>
+#include <string>
 
 #include <sys/timerfd.h>
 
@@ -262,6 +263,7 @@ private:
         , transport(other.transport)
         , armed(other.armed)
         , timerFd(other.timerFd)
+        , peer()
     { }
 
     Timeout(Tcp::Transport* transport_,
@@ -272,8 +274,8 @@ private:
         , transport(transport_)
         , armed(false)
         , timerFd(-1)
-    {
-    }
+        , peer()
+    { }
 
     template<typename Ptr>
     void associatePeer(const Ptr& ptr) {
@@ -442,7 +444,7 @@ class ResponseWriter : public Response {
 public:
     static constexpr size_t DefaultStreamSize = 512;
 
-    friend Async::Promise<ssize_t> serveFile(ResponseWriter&, const char *, const Mime::MediaType&);
+    friend Async::Promise<ssize_t> serveFile(ResponseWriter&, const std::string&, const Mime::MediaType&);
 
     friend class Handler;
     friend class Timeout;
@@ -569,6 +571,7 @@ public:
 private:
     ResponseWriter(Tcp::Transport* transport, Request request, Handler* handler)
         : Response(request.version())
+        , peer_()
         , buf_(DefaultStreamSize)
         , transport_(transport)
         , timeout_(transport, handler, std::move(request))
@@ -600,7 +603,7 @@ private:
 };
 
 Async::Promise<ssize_t> serveFile(
-        ResponseWriter& response, const char *fileName,
+        ResponseWriter& response, const std::string& fileName,
         const Mime::MediaType& contentType = Mime::MediaType());
 
 namespace Private {
@@ -691,7 +694,9 @@ namespace Private {
     class ParserBase {
     public:
         ParserBase()
-            : cursor(&buffer)
+            : buffer()
+            , cursor(&buffer)
+            , allSteps()
             , currentStep(0)
         { }
 
@@ -724,6 +729,7 @@ namespace Private {
 
         Parser()
             : ParserBase()
+            , request()
         {
             allSteps[0].reset(new RequestLineStep(&request));
             allSteps[1].reset(new HeadersStep(&request));
@@ -732,6 +738,7 @@ namespace Private {
 
         Parser(const char* data, size_t len)
             : ParserBase()
+            , request()
         {
             allSteps[0].reset(new RequestLineStep(&request));
             allSteps[1].reset(new HeadersStep(&request));
@@ -756,6 +763,7 @@ namespace Private {
     public:
         Parser()
             : ParserBase()
+            , response()
         {
             allSteps[0].reset(new ResponseLineStep(&response));
             allSteps[1].reset(new HeadersStep(&response));
@@ -764,6 +772,7 @@ namespace Private {
 
         Parser(const char* data, size_t len)
             : ParserBase()
+            , response()
         {
             allSteps[0].reset(new ResponseLineStep(&response));
             allSteps[1].reset(new HeadersStep(&response));
@@ -806,15 +815,8 @@ namespace helpers
 {
     inline Address httpAddr(const StringView& view) {
         auto const str = view.toString();
-        auto const pos = str.find(':');
-        if (pos == std::string::npos) {
-            return Address(std::move(str), HTTP_STANDARD_PORT);
+        return Address(str);
         }
-
-        auto const host = str.substr(0, pos);
-        auto const port = std::stoi(str.substr(pos + 1));
-        return Address(std::move(host), port);
-    }
 } // namespace helpers
 } // namespace Http
 } // namespace Pistache

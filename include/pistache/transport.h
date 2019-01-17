@@ -16,6 +16,7 @@
 #include <deque>
 #include <memory>
 #include <unordered_map>
+#include <mutex>
 
 namespace Pistache {
 namespace Tcp {
@@ -25,7 +26,9 @@ class Handler;
 
 class Transport : public Aio::Handler {
 public:
-    Transport(const std::shared_ptr<Tcp::Handler>& handler);
+    explicit Transport(const std::shared_ptr<Tcp::Handler>& handler);
+    Transport(const Transport&) = delete;
+    Transport& operator=(const Transport&) = delete;
 
     void init(const std::shared_ptr<Tcp::Handler>& handler);
 
@@ -43,8 +46,7 @@ public:
             auto detached = holder.detach();
             WriteEntry write(std::move(deferred), detached, flags);
             write.peerFd = fd;
-            auto *e = writesQueue.allocEntry(std::move(write));
-            writesQueue.push(e);
+            writesQueue.push(std::move(write));
         });
     }
 
@@ -79,19 +81,17 @@ private:
 
         explicit BufferHolder(const Buffer& buffer, off_t offset = 0)
             : u(buffer)
+            , size_(buffer.len)
+            , offset_(offset)
             , type(Raw)
-        {
-            offset_ = offset;
-            size_ = buffer.len;
-        }
+        { }
 
         explicit BufferHolder(const FileBuffer& buffer, off_t offset = 0)
             : u(buffer.fd())
+            , size_(buffer.size())
+            , offset_(offset)
             , type(File)
-        {
-            offset_ = offset;
-            size_ = buffer.size();
-        }
+        { }
 
         bool isFile() const { return type == File; }
         bool isRaw() const { return type == Raw; }
@@ -165,6 +165,7 @@ private:
           : fd(fd_)
           , value(value_)
           , deferred(std::move(deferred_))
+          , active()
         {
             active.store(true, std::memory_order_relaxed);
         }
@@ -197,9 +198,12 @@ private:
 
         std::shared_ptr<Peer> peer;
     };
+    using Lock = std::mutex;
+    using Guard = std::lock_guard<Lock>;
 
     PollableQueue<WriteEntry> writesQueue;
-    std::unordered_map<Fd, std::deque<WriteEntry> > toWrite;
+    std::unordered_map<Fd, std::deque<WriteEntry>> toWrite;
+    Lock toWriteLock;
 
     PollableQueue<TimerEntry> timersQueue;
     std::unordered_map<Fd, TimerEntry> timers;

@@ -97,7 +97,7 @@ TEST(cookie_test, write_test) {
     c1.domain = Some(std::string("example.com"));
 
     std::ostringstream oss;
-    c1.write(oss);
+    oss << c1;
 
     ASSERT_EQ(oss.str(), "lang=fr-FR; Path=/; Domain=example.com");
 
@@ -110,13 +110,13 @@ TEST(cookie_test, write_test) {
     c2.expires = Some(FullDate(expires));
 
     oss.str("");
-    c2.write(oss);
+    oss << c2;
 
     Cookie c3("lang", "en-US");
     c3.secure = true;
     c3.ext.insert(std::make_pair("Scope", "Private"));
     oss.str("");
-    c3.write(oss);
+    oss << c3;
 
     ASSERT_EQ(oss.str(), "lang=en-US; Secure; Scope=Private");
 }
@@ -145,8 +145,23 @@ TEST(cookie_test, cookiejar_test) {
         ASSERT_EQ(jar.get("key3").value, "value3");
         ASSERT_EQ(jar.get("key4").value, "");
         ASSERT_EQ(jar.get("key5").value, "foo=bar");
+        ASSERT_THROW(jar.get("key6"), std::runtime_error);
     });
     
     CookieJar jar;
     ASSERT_THROW(jar.addFromRaw("key4", strlen("key4")), std::runtime_error);
+}
+
+TEST(cookie_test, cookiejar_test_2) {
+    CookieJar jar;
+    jar.add(Cookie("k1", "v1"));
+    jar.add(Cookie("k2", "v2"));
+
+    ASSERT_TRUE(jar.has("k1"));
+    ASSERT_TRUE(jar.has("k2"));
+
+    jar.removeAllCookies();
+
+    ASSERT_FALSE(jar.has("k1"));
+    ASSERT_FALSE(jar.has("k2"));
 }

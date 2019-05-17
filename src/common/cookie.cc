@@ -4,13 +4,13 @@
    Cookie implementation
 */
 
+#include <pistache/cookie.h>
+#include <pistache/config.h>
+#include <pistache/stream.h>
+
 #include <iterator>
 #include <unordered_map>
 
-#include <pistache/cookie.h>
-#include <pistache/stream.h>
-
-using namespace std;
 
 namespace Pistache {
 namespace Http {
@@ -97,10 +97,14 @@ namespace {
 Cookie::Cookie(std::string name, std::string value)
     : name(std::move(name))
     , value(std::move(value))
+    , path()
+    , domain()
+    , expires()
+    , maxAge()
     , secure(false)
     , httpOnly(false)
-{
-}
+    , ext()
+{ }
 
 Cookie
 Cookie::fromRaw(const char* str, size_t len)
@@ -203,9 +207,15 @@ Cookie::write(std::ostream& os) const {
 
 }
 
-CookieJar::CookieJar()
+std::ostream& operator<<(std::ostream& os, const Cookie& cookie)
 {
+    cookie.write(os);
+    return os;
 }
+
+CookieJar::CookieJar()
+    : cookies()
+{ }
 
 void
 CookieJar::add(const Cookie& cookie) {
@@ -224,9 +234,9 @@ CookieJar::add(const Cookie& cookie) {
 
 }
 
-void // Unimplemented
-CookieJar::removeCookie(const std::string& name) {
-	// Empty for now, can be used later
+void 
+CookieJar::removeAllCookies() {
+	cookies.clear();
 }
 
 void

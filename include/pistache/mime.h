@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <stdexcept>
 #include <cassert>
+#include <cmath>
 
 #include <pistache/optional.h>
 
@@ -89,6 +90,7 @@ public:
     typedef uint16_t Type;
 
     explicit Q(Type val)
+       : val_()
     {
         if (val > 100) {
             throw std::runtime_error("Invalid quality value, must be in the [0; 100] range");
@@ -98,7 +100,7 @@ public:
     }
 
     static Q fromFloat(double f) {
-        return Q(static_cast<Type>(f * 100.0));
+        return Q(static_cast<Type>(round(f * 100.0)));
     }
 
     Type value() const { return val_; }
@@ -123,12 +125,22 @@ public:
         : top_(Type::None)
         , sub_(Subtype::None)
         , suffix_(Suffix::None)
+        , raw_()
+        , rawSubIndex()
+        , rawSuffixIndex()
+        , params()
+        , q_()
     { }
 
     MediaType(std::string raw, Parse parse = DontParse)
         : top_(Type::None)
         , sub_(Subtype::None)
         , suffix_(Suffix::None)
+        , raw_()
+        , rawSubIndex()
+        , rawSuffixIndex()
+        , params()
+        , q_()
     {
         if (parse == DoParse) {
             parseRaw(raw.c_str(), raw.length());
@@ -142,12 +154,22 @@ public:
         : top_(top)
         , sub_(sub)
         , suffix_(Suffix::None)
+        , raw_()
+        , rawSubIndex()
+        , rawSuffixIndex()
+        , params()
+        , q_()
     { }
 
     MediaType(Mime::Type top, Mime::Subtype sub, Mime::Suffix suffix)
         : top_(top)
         , sub_(sub)
         , suffix_(suffix)
+        , raw_()
+        , rawSubIndex()
+        , rawSuffixIndex()
+        , params()
+        , q_()
     { }
 
 
@@ -172,8 +194,8 @@ public:
     const Optional<Q>& q() const { return q_; }
     void setQuality(Q quality);
 
-    Optional<std::string> getParam(std::string name) const;
-    void setParam(std::string name, std::string value);
+    Optional<std::string> getParam(const std::string& name) const;
+    void setParam(const std::string& name, std::string value);
 
     std::string toString() const;
     bool isValid() const;

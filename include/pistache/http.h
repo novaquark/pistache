@@ -13,6 +13,7 @@
 #include <sstream>
 #include <algorithm>
 #include <memory>
+#include <string>
 
 #include <sys/timerfd.h>
 
@@ -84,10 +85,11 @@ protected:
     Version version_;
     Code code_;
 
-    Header::Collection headers_;
     std::string body_;
 
     CookieJar cookies_;
+    Header::Collection headers_;
+
 };
 
 namespace Uri {
@@ -145,6 +147,8 @@ public:
     // @Todo: try to remove the need for friend-ness here
     friend class Client;
 
+    Request();
+
     Request(const Request& other) = default;
     Request& operator=(const Request& other) = default;
 
@@ -175,8 +179,6 @@ public:
 #endif
 
 private:
-    Request();
-
 #ifdef LIBSTDCPP_SMARTPTR_LOCK_FIXME
     void associatePeer(const std::shared_ptr<Tcp::Peer>& peer) {
         if (peer_.use_count() > 0)
@@ -262,6 +264,7 @@ private:
         , transport(other.transport)
         , armed(other.armed)
         , timerFd(other.timerFd)
+        , peer()
     { }
 
     Timeout(Tcp::Transport* transport_,
@@ -272,8 +275,8 @@ private:
         , transport(transport_)
         , armed(false)
         , timerFd(-1)
-    {
-    }
+        , peer()
+    { }
 
     template<typename Ptr>
     void associatePeer(const Ptr& ptr) {
@@ -393,11 +396,9 @@ public:
     friend class Private::ResponseLineStep;
     friend class Private::Parser<Http::Response>;
 
-    Response()
-        : Message()
-    { }
+    Response() = default;
 
-    Response(Version version)
+    explicit Response(Version version)
         : Message()
     {
         version_ = version;
@@ -442,7 +443,7 @@ class ResponseWriter : public Response {
 public:
     static constexpr size_t DefaultStreamSize = 512;
 
-    friend Async::Promise<ssize_t> serveFile(ResponseWriter&, const char *, const Mime::MediaType&);
+    friend Async::Promise<ssize_t> serveFile(ResponseWriter&, const std::string&, const Mime::MediaType&);
 
     friend class Handler;
     friend class Timeout;
@@ -485,6 +486,12 @@ public:
      * - movedPermantly -> 301
      * - moved() -> 302
      */
+    Async::Promise<ssize_t> sendMethodNotAllowed(const std::vector<Http::Method>& supportedMethods) {
+        code_ = Http::Code::Method_Not_Allowed;
+        headers_.add(std::make_shared<Http::Header::Allow>(supportedMethods));
+        std::string body = codeString(Pistache::Http::Code::Method_Not_Allowed);
+        return putOnWire(body.c_str(), body.size());
+    }
 
     Async::Promise<ssize_t> send(Code code) {
         code_ = code;
@@ -569,6 +576,7 @@ public:
 private:
     ResponseWriter(Tcp::Transport* transport, Request request, Handler* handler)
         : Response(request.version())
+        , peer_()
         , buf_(DefaultStreamSize)
         , transport_(transport)
         , timeout_(transport, handler, std::move(request))
@@ -600,7 +608,7 @@ private:
 };
 
 Async::Promise<ssize_t> serveFile(
-        ResponseWriter& response, const char *fileName,
+        ResponseWriter& response, const std::string& fileName,
         const Mime::MediaType& contentType = Mime::MediaType());
 
 namespace Private {
@@ -608,7 +616,7 @@ namespace Private {
     enum class State { Again, Next, Done };
 
     struct Step {
-        Step(Message* request)
+        explicit Step(Message* request)
             : message(request)
         { }
 
@@ -616,53 +624,53 @@ namespace Private {
 
         virtual State apply(StreamCursor& cursor) = 0;
 
-        void raise(const char* msg, Code code = Code::Bad_Request);
+        static void raise(const char* msg, Code code = Code::Bad_Request);
 
         Message *message;
     };
 
     class RequestLineStep : public Step {
     public:
-        RequestLineStep(Request* request)
+        explicit RequestLineStep(Request* request)
             : Step(request)
         { }
 
-        State apply(StreamCursor& cursor);
+        State apply(StreamCursor& cursor) override;
     };
 
     class ResponseLineStep : public Step {
     public:
-        ResponseLineStep(Response* response)
+        explicit ResponseLineStep(Response* response)
             : Step(response)
         { }
 
-        State apply(StreamCursor& cursor);
+        State apply(StreamCursor& cursor) override;
     };
 
     class HeadersStep : public Step {
     public:
-        HeadersStep(Message* request)
+        explicit HeadersStep(Message* request)
             : Step(request)
         { }
 
-        State apply(StreamCursor& cursor);
+        State apply(StreamCursor& cursor) override;
     };
 
     class BodyStep : public Step {
     public:
-        BodyStep(Message* message_)
+        explicit BodyStep(Message* message_)
             : Step(message_)
             , chunk(message_)
             , bytesRead(0)
         { }
 
-        State apply(StreamCursor& cursor);
+        State apply(StreamCursor& cursor) override;
 
     private:
         struct Chunk {
             enum Result { Complete, Incomplete, Final };
 
-            Chunk(Message* message_)
+            explicit Chunk(Message* message_)
               : message(message_)
               , bytesRead(0)
               , size(-1)
@@ -691,7 +699,9 @@ namespace Private {
     class ParserBase {
     public:
         ParserBase()
-            : cursor(&buffer)
+            : buffer()
+            , cursor(&buffer)
+            , allSteps()
             , currentStep(0)
         { }
 
@@ -724,6 +734,7 @@ namespace Private {
 
         Parser()
             : ParserBase()
+            , request()
         {
             allSteps[0].reset(new RequestLineStep(&request));
             allSteps[1].reset(new HeadersStep(&request));
@@ -732,6 +743,7 @@ namespace Private {
 
         Parser(const char* data, size_t len)
             : ParserBase()
+            , request()
         {
             allSteps[0].reset(new RequestLineStep(&request));
             allSteps[1].reset(new HeadersStep(&request));
@@ -756,6 +768,7 @@ namespace Private {
     public:
         Parser()
             : ParserBase()
+            , response()
         {
             allSteps[0].reset(new ResponseLineStep(&response));
             allSteps[1].reset(new HeadersStep(&response));
@@ -764,6 +777,7 @@ namespace Private {
 
         Parser(const char* data, size_t len)
             : ParserBase()
+            , response()
         {
             allSteps[0].reset(new ResponseLineStep(&response));
             allSteps[1].reset(new HeadersStep(&response));
@@ -806,15 +820,8 @@ namespace helpers
 {
     inline Address httpAddr(const StringView& view) {
         auto const str = view.toString();
-        auto const pos = str.find(':');
-        if (pos == std::string::npos) {
-            return Address(std::move(str), HTTP_STANDARD_PORT);
+        return Address(str);
         }
-
-        auto const host = str.substr(0, pos);
-        auto const port = std::stoi(str.substr(pos + 1));
-        return Address(std::move(host), port);
-    }
 } // namespace helpers
 } // namespace Http
 } // namespace Pistache

@@ -1,6 +1,6 @@
-/* 
+/*
    Mathieu Stefani, 16 janvier 2016
-   
+
    Representation of a Cookie as per http://tools.ietf.org/html/rfc6265
 */
 
@@ -20,6 +20,8 @@ namespace Pistache {
 namespace Http {
 
 struct Cookie {
+    friend std::ostream& operator<<(std::ostream& os, const Cookie& cookie);
+
     Cookie(std::string name, std::string value);
 
     std::string name;
@@ -38,8 +40,11 @@ struct Cookie {
     static Cookie fromRaw(const char* str, size_t len);
     static Cookie fromString(const std::string& str);
 
+private:
     void write(std::ostream& os) const;
 };
+
+std::ostream& operator<<(std::ostream& os, const Cookie& cookie);
 
 class CookieJar {
 public:
@@ -49,12 +54,15 @@ public:
     struct iterator : std::iterator<std::bidirectional_iterator_tag, Cookie> {
         iterator(const Storage::const_iterator& _iterator)
             : iter_storage(_iterator)
-        {             
-        }
-        
+            , iter_cookie_values()
+            , iter_storage_end()
+        { }
+
         iterator(const Storage::const_iterator& _iterator, const Storage::const_iterator& end)
-            : iter_storage(_iterator),iter_storage_end(end)
-        {   
+            : iter_storage(_iterator)
+            , iter_cookie_values()
+            , iter_storage_end(end)
+        {
             if(iter_storage != iter_storage_end) {
                 iter_cookie_values = iter_storage->second.begin();
             }
@@ -63,15 +71,19 @@ public:
         Cookie operator*() const {
             return iter_cookie_values->second; // return iter_storage->second;
         }
-        
-        iterator operator++() {
+
+        const Cookie* operator->() const {
+            return &(iter_cookie_values->second);
+        }
+
+        iterator& operator++() {
             ++iter_cookie_values;
             if(iter_cookie_values == iter_storage->second.end()) {
                 ++iter_storage;
                 if(iter_storage != iter_storage_end)
                     iter_cookie_values = iter_storage->second.begin();
             }
-            return iterator(iter_storage,iter_storage_end);
+            return *this;
         }
 
         iterator operator++(int) {
@@ -103,8 +115,8 @@ public:
     CookieJar();
 
     void add(const Cookie& cookie);
-    void removeCookie(const std::string& name);  // Unimplemented
-    
+    void removeAllCookies();
+
     void addFromRaw(const char *str, size_t len);
     Cookie get(const std::string& name) const;
 

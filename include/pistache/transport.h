@@ -16,6 +16,7 @@
 #include <deque>
 #include <memory>
 #include <unordered_map>
+#include <mutex>
 
 namespace Pistache {
 namespace Tcp {
@@ -25,7 +26,9 @@ class Handler;
 
 class Transport : public Aio::Handler {
 public:
-    Transport(const std::shared_ptr<Tcp::Handler>& handler);
+    explicit Transport(const std::shared_ptr<Tcp::Handler>& handler);
+    Transport(const Transport&) = delete;
+    Transport& operator=(const Transport&) = delete;
 
     void init(const std::shared_ptr<Tcp::Handler>& handler);
 
@@ -43,8 +46,7 @@ public:
             auto detached = holder.detach();
             WriteEntry write(std::move(deferred), detached, flags);
             write.peerFd = fd;
-            auto *e = writesQueue.allocEntry(std::move(write));
-            writesQueue.push(e);
+            writesQueue.push(std::move(write));
         });
     }
 
@@ -77,21 +79,19 @@ private:
     struct BufferHolder {
         enum Type { Raw, File };
 
-        explicit BufferHolder(const Buffer& buffer, off_t offset = 0)
-            : u(buffer)
+        explicit BufferHolder(const RawBuffer& buffer, off_t offset = 0)
+            : _raw(buffer)
+            , size_(buffer.size())
+            , offset_(offset)
             , type(Raw)
-        {
-            offset_ = offset;
-            size_ = buffer.len;
-        }
+        { }
 
         explicit BufferHolder(const FileBuffer& buffer, off_t offset = 0)
-            : u(buffer.fd())
+            : _fd(buffer.fd())
+            , size_(buffer.size())
+            , offset_(offset)
             , type(File)
-        {
-            offset_ = offset;
-            size_ = buffer.size();
-        }
+        { }
 
         bool isFile() const { return type == File; }
         bool isRaw() const { return type == Raw; }
@@ -101,44 +101,38 @@ private:
         Fd fd() const {
             if (!isFile())
                 throw std::runtime_error("Tried to retrieve fd of a non-filebuffer");
-
-            return u.fd;
-
+            return _fd;
         }
 
-        Buffer raw() const {
+        RawBuffer raw() const {
             if (!isRaw())
                 throw std::runtime_error("Tried to retrieve raw data of a non-buffer");
-
-            return u.raw;
+            return _raw;
         }
 
-        BufferHolder detach(size_t offset = 0) const {
+        BufferHolder detach(size_t offset = 0) {
             if (!isRaw())
-                return BufferHolder(u.fd, size_, offset);
+                return BufferHolder(_fd, size_, offset);
 
-            if (u.raw.isOwned)
-                return BufferHolder(u.raw, offset);
+            if (_raw.isDetached())
+                return BufferHolder(_raw, offset);
 
-            auto detached = u.raw.detach(offset);
+            auto detached = _raw.detach(offset);
             return BufferHolder(detached);
+
         }
 
-    private:
+      private:
         BufferHolder(Fd fd, size_t size, off_t offset = 0)
-         : u(fd)
+         : _fd(fd)
          , size_(size)
          , offset_(offset)
          , type(File)
         { }
 
-        union U {
-            Buffer raw;
-            Fd fd;
+        RawBuffer _raw;
+        Fd _fd;
 
-            U(Buffer buffer) : raw(buffer) { }
-            U(Fd fd_) : fd(fd_) { }
-        } u;
         size_t size_= 0;
         off_t offset_ = 0;
         Type type;
@@ -165,6 +159,7 @@ private:
           : fd(fd_)
           , value(value_)
           , deferred(std::move(deferred_))
+          , active()
         {
             active.store(true, std::memory_order_relaxed);
         }
@@ -197,9 +192,12 @@ private:
 
         std::shared_ptr<Peer> peer;
     };
+    using Lock = std::mutex;
+    using Guard = std::lock_guard<Lock>;
 
     PollableQueue<WriteEntry> writesQueue;
-    std::unordered_map<Fd, std::deque<WriteEntry> > toWrite;
+    std::unordered_map<Fd, std::deque<WriteEntry>> toWrite;
+    Lock toWriteLock;
 
     PollableQueue<TimerEntry> timersQueue;
     std::unordered_map<Fd, TimerEntry> timers;
@@ -221,9 +219,11 @@ private:
     std::shared_ptr<Peer>& getPeer(Polling::Tag tag);
 
     void
-    armTimerMs(Fd fd,
-              std::chrono::milliseconds value,
-              Async::Deferred<uint64_t> deferred);
+    armTimerMs(
+        Fd fd,
+        std::chrono::milliseconds value,
+        Async::Deferred<uint64_t> deferred
+    );
 
     void armTimerMsImpl(TimerEntry entry);
 

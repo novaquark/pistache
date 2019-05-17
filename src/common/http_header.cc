@@ -4,21 +4,37 @@
    Implementation of common HTTP headers described by the RFC
 */
 
-#include <stdexcept>
-#include <iterator>
-#include <cstring>
-#include <iostream>
-
 #include <pistache/http_header.h>
 #include <pistache/common.h>
+#include <pistache/config.h>
 #include <pistache/http.h>
 #include <pistache/stream.h>
 
-using namespace std;
+#include <stdexcept>
+#include <iterator>
+#include <limits>
+#include <cstring>
+#include <iostream>
 
 namespace Pistache {
 namespace Http {
 namespace Header {
+
+void
+Header::parse(const std::string & str) {
+    parseRaw(str.c_str(), str.length());
+}
+
+void
+Header::parseRaw(const char *str, size_t len) {
+    parse(std::string(str, len));
+}
+
+void
+Allow::parseRaw(const char* str, size_t len) {
+    UNUSED(str)
+    UNUSED(len)
+}
 
 const char* encodingString(Encoding encoding) {
     switch (encoding) {
@@ -33,26 +49,9 @@ const char* encodingString(Encoding encoding) {
     case Encoding::Chunked:
         return "chunked";
     case Encoding::Unknown:
-        return "unknown";
+    	return "unknown";
     }
-
-    unreachable();
-}
-
-void
-Header::parse(const std::string& data) {
-    parseRaw(data.c_str(), data.size());
-}
-
-void
-Header::parseRaw(const char *str, size_t len) {
-    parse(std::string(str, len));
-}
-
-void
-Allow::parseRaw(const char* str, size_t len) {
-    UNUSED(str)
-    UNUSED(len)
+    return "unknown";
 }
 
 void
@@ -205,7 +204,7 @@ CacheControl::write(std::ostream& os) const {
             case CacheDirective::SMaxAge:
                 return "s-maxage";
             case CacheDirective::Ext:
-                return "";
+	    	return "";
             default:
                 return "";
         }
@@ -312,12 +311,12 @@ Date::parse(const std::string &str) {
 
 void
 Date::write(std::ostream& os) const {
-    UNUSED(os)
+	fullDate_.write(os);
 }
 
 void
-Expect::parseRaw(const char* str, size_t len) {
-    if (memcmp(str, "100-continue", len)) {
+Expect::parseRaw(const char* str, size_t /*len*/) {
+    if (std::strcmp(str, "100-continue") == 0) {
         expectation_ = Expectation::Continue;
     } else {
         expectation_ = Expectation::Ext;
@@ -331,22 +330,25 @@ Expect::write(std::ostream& os) const {
     }
 }
 
-Host::Host(const std::string& data) {
+Host::Host(const std::string& data)
+    : host_()
+    , port_(0)
+{
     parse(data);
 }
 
-void
-Host::parse(const std::string& data) {
-    auto pos = data.find(':');
-    if (pos != std::string::npos) {
-        std::string h = data.substr(0, pos);
-        int16_t p = std::stoi(data.substr(pos + 1));
-
-        host_ = h;
-        port_ = p;
-    } else {
-        host_ = data;
-        port_ = HTTP_STANDARD_PORT;
+void Host::parse(const std::string& data)
+{
+    AddressParser parser(data);
+    host_ = parser.rawHost();
+    const std::string& port = parser.rawPort();
+    if (port.empty())
+    {
+        port_ = Const::HTTP_STANDARD_PORT;
+    }
+    else
+    {
+        port_ = Port(port);
     }
 }
 
@@ -443,6 +445,26 @@ AccessControlAllowHeaders::write(std::ostream& os) const {
 }
 
 void
+AccessControlExposeHeaders::parse(const std::string& data) {
+  val_ = data;
+}
+
+void
+AccessControlExposeHeaders::write(std::ostream& os) const {
+  os << val_;
+}
+
+void
+AccessControlAllowMethods::parse(const std::string& data) {
+  val_ = data;
+}
+
+void
+AccessControlAllowMethods::write(std::ostream& os) const {
+  os << val_;
+}
+
+void
 EncodingHeader::parseRaw(const char* str, size_t len) {
     if (!strncasecmp(str, "gzip", len)) {
         encoding_ = Encoding::Gzip;
@@ -474,26 +496,33 @@ Server::Server(const std::vector<std::string>& tokens)
 { }
 
 Server::Server(const std::string& token)
+    : tokens_()
 {
     tokens_.push_back(token);
 }
 
 Server::Server(const char* token)
+   : tokens_()
 {
     tokens_.emplace_back(token);
 }
 
 void
-Server::parse(const std::string& data)
+Server::parse(const std::string& token)
 {
-    UNUSED(data)
+    tokens_.push_back(token);
 }
 
 void
 Server::write(std::ostream& os) const
 {
-    std::copy(std::begin(tokens_), std::end(tokens_),
-                 std::ostream_iterator<std::string>(os, " "));
+    for (size_t i = 0; i < tokens_.size(); i++) {
+        auto & token = tokens_[i];
+        os << token;
+        if ( i < tokens_.size() - 1 ) {
+            os << " ";
+        }
+    }
 }
 
 void

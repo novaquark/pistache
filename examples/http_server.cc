@@ -10,19 +10,10 @@
 #include <pistache/http_headers.h>
 #include <pistache/cookie.h>
 #include <pistache/endpoint.h>
+#include <pistache/common.h>
 
 using namespace std;
 using namespace Pistache;
-
-struct PrintException {
-    void operator()(std::exception_ptr exc) const {
-        try {
-            std::rethrow_exception(exc);
-        } catch (const std::exception& e) {
-            std::cerr << "An exception occured: " << e.what() << std::endl;
-        }
-    }
-};
 
 struct LoadMonitor {
     LoadMonitor(const std::shared_ptr<Http::Endpoint>& endpoint)
@@ -85,7 +76,7 @@ class MyHandler : public Http::Handler {
 
     void onRequest(
             const Http::Request& req,
-            Http::ResponseWriter response) {
+            Http::ResponseWriter response) override {
 
         if (req.resource() == "/ping") {
             if (req.method() == Http::Method::Get) {
@@ -149,7 +140,9 @@ class MyHandler : public Http::Handler {
 
     }
 
-    void onTimeout(const Http::Request& req, Http::ResponseWriter response) {
+    void onTimeout(
+            const Http::Request& req,
+            Http::ResponseWriter response) override {
         UNUSED(req);
         response
             .send(Http::Code::Request_Timeout, "Timeout")

@@ -153,6 +153,9 @@ Transport::handleIncoming(const std::shared_ptr<Peer>& peer) {
                 if (errno == ECONNRESET) {
                     handlePeerDisconnection(peer);
                 }
+                else if (errno == EBADF) {
+                    // this can happen if close() was called, do nothing
+                }
                 else {
                     throw std::runtime_error(strerror(errno));
                 }

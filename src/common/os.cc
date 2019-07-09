@@ -155,7 +155,12 @@ namespace Polling {
             ev.events |= EPOLLET;
         ev.data.u64 = tag.value_;
 
-        TRY(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev));
+        try{
+            TRY(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev));
+        } 
+        catch(std::runtime_error e) {
+            std::cerr << "got exception on addFd: " << e.what() << std::endl;
+        }
     }
 
     void
@@ -183,8 +188,12 @@ namespace Polling {
         if (mode == Mode::Edge)
             ev.events |= EPOLLET;
         ev.data.u64 = tag.value_;
-
-        TRY(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev));
+        try {
+            TRY(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev));
+        }
+        catch(std::runtime_error e) {
+            std::cerr << "got exception on rearmFd: " << e.what() << std::endl;
+        }
     }
 
     int
